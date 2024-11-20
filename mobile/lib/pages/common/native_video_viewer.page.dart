@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_hooks/flutter_hooks.dart' hide Store;
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/entities/asset.entity.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
+import 'package:immich_mobile/pages/common/video_viewer.page.dart';
 import 'package:immich_mobile/providers/app_settings.provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/current_asset.provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/is_motion_video_playing.provider.dart';
@@ -24,8 +26,8 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 @RoutePage()
 class NativeVideoViewerPage extends HookConsumerWidget {
   final Asset asset;
-  final bool showControls;
   final Widget image;
+  final bool showControls;
 
   const NativeVideoViewerPage({
     super.key,
@@ -36,6 +38,15 @@ class NativeVideoViewerPage extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    /// TODO: Remove this when seeking remote videos on Android in the native video player is smooth.
+    if (true) {
+      return VideoViewerPage(
+        asset: asset,
+        image: image,
+        showControls: showControls,
+      );
+    }
+
     final loopVideo = ref.watch(
       appSettingsServiceProvider.select(
         (settings) => settings.getSetting<bool>(AppSettingsEnum.loopVideo),

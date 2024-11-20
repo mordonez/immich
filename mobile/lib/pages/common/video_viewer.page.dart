@@ -1,33 +1,31 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/entities/asset.entity.dart';
-import 'package:immich_mobile/providers/asset_viewer/show_controls.provider.dart';
+import 'package:immich_mobile/providers/asset_viewer/current_asset.provider.dart';
+import 'package:immich_mobile/providers/asset_viewer/is_motion_video_playing.provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/video_player_controller_provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/video_player_controls_provider.dart';
 import 'package:immich_mobile/providers/asset_viewer/video_player_value_provider.dart';
+import 'package:immich_mobile/widgets/asset_viewer/custom_video_player_controls.dart';
 import 'package:immich_mobile/widgets/asset_viewer/video_player.dart';
-import 'package:immich_mobile/widgets/common/delayed_loading_indicator.dart';
+import 'package:logging/logging.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+/// Note: this only exists for remote video playback on Android.
+/// TODO: Remove this when seeking remote videos on Android in the native video player is smooth.
 class VideoViewerPage extends HookConsumerWidget {
   final Asset asset;
-  final bool isMotionVideo;
-  final Widget? placeholder;
-  final Duration hideControlsTimer;
+  final Widget image;
   final bool showControls;
-  final bool showDownloadingIndicator;
-  final bool loopVideo;
 
   const VideoViewerPage({
     super.key,
     required this.asset,
-    this.isMotionVideo = false,
-    this.placeholder,
+    required this.image,
     this.showControls = true,
-    this.hideControlsTimer = const Duration(seconds: 5),
-    this.showDownloadingIndicator = true,
-    this.loopVideo = false,
   });
 
   @override
@@ -36,6 +34,16 @@ class VideoViewerPage extends HookConsumerWidget {
         ref.watch(videoPlayerControllerProvider(asset: asset)).value;
     // The last volume of the video used when mute is toggled
     final lastVolume = useState(0.5);
+
+    // When a video is opened through the timeline, `isCurrent` will immediately be true.
+    // When swiping from video A to video B, `isCurrent` will initially be true for video A and false for video B.
+    // If the swipe is completed, `isCurrent` will be true for video B after a delay.
+    // If the swipe is canceled, `currentAsset` will not have changed and video A will continue to play.
+    final currentAsset = useState(ref.read(currentAssetProvider));
+    final isCurrent = currentAsset.value == asset;
+    final showMotionVideo = useState(false);
+
+    final log = Logger('VideoViewerPage');
 
     // When the volume changes, set the volume
     ref.listen(videoPlayerControlsProvider.select((value) => value.mute),
@@ -56,17 +64,38 @@ class VideoViewerPage extends HookConsumerWidget {
       }
 
       // Find the position to seek to
-      final Duration seek = controller.value.duration * (position / 100.0);
-      controller.seekTo(seek);
+      controller.seekTo(Duration(seconds: position ~/ 1));
     });
 
-    // When the custom video controls paus or plays
+    // When the custom video controls pause or play
     ref.listen(videoPlayerControlsProvider.select((value) => value.pause),
-        (lastPause, pause) {
+        (lastPause, pause) async {
+      if (controller == null || asset.isMotionPhoto) {
+        return;
+      }
+
       if (pause) {
-        controller?.pause();
+        await controller.pause();
       } else {
-        controller?.play();
+        await controller.play();
+      }
+    });
+
+    ref.listen(isPlayingMotionVideoProvider, (_, value) async {
+      if (!asset.isMotionPhoto || controller == null || !context.mounted) {
+        return;
+      }
+
+      showMotionVideo.value = value;
+      try {
+        if (value) {
+          await controller.seekTo(Duration.zero);
+          await controller.play();
+        } else {
+          await controller.pause();
+        }
+      } catch (error) {
+        log.severe('Error toggling motion video: $error');
       }
     });
 
@@ -88,6 +117,14 @@ class VideoViewerPage extends HookConsumerWidget {
       }
     }
 
+    ref.listen(currentAssetProvider, (_, value) {
+      if (controller != null && value != asset) {
+        controller.removeListener(updateVideoPlayback);
+      }
+
+      currentAsset.value = value;
+    });
+
     // Adds and removes the listener to the video player
     useEffect(
       () {
@@ -99,19 +136,11 @@ class VideoViewerPage extends HookConsumerWidget {
           return null;
         }
 
-        // Hide the controls
-        // Done in a microtask to avoid setting the state while the is building
-        if (!isMotionVideo) {
-          Future.microtask(() {
-            ref.read(showControlsProvider.notifier).show = false;
-          });
-        }
-
-        // Subscribes to listener
-        Future.microtask(() {
-          controller.addListener(updateVideoPlayback);
-        });
+        Future.microtask(() => controller.addListener(updateVideoPlayback));
         return () {
+          ref.read(videoPlayerControlsProvider.notifier).reset();
+          ref.read(videoPlaybackValueProvider.notifier).reset();
+          WakelockPlus.disable();
           // Removes listener when we dispose
           controller.removeListener(updateVideoPlayback);
           controller.pause();
@@ -120,48 +149,24 @@ class VideoViewerPage extends HookConsumerWidget {
       [controller],
     );
 
-    final size = MediaQuery.sizeOf(context);
-
-    return PopScope(
-      onPopInvokedWithResult: (didPop, _) {
-        ref.read(videoPlaybackValueProvider.notifier).reset();
-      },
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 400),
-        child: Stack(
-          children: [
-            Visibility(
-              visible: controller == null,
-              child: Stack(
-                children: [
-                  if (placeholder != null) placeholder!,
-                  const Positioned.fill(
-                    child: Center(
-                      child: DelayedLoadingIndicator(
-                        fadeInDuration: Duration(milliseconds: 500),
-                      ),
-                    ),
-                  ),
-                ],
+    return Stack(
+      children: [
+        Center(key: ValueKey(asset.id), child: image),
+        if (controller != null && isCurrent)
+          Visibility.maintain(
+            key: ValueKey(asset),
+            visible: asset.isVideo || showMotionVideo.value,
+            child: Center(
+              key: ValueKey(asset),
+              child: VideoPlayerViewer(
+                controller: controller,
+                showControls: showControls,
+                autoPlay: asset.isVideo,
               ),
             ),
-            if (controller != null)
-              SizedBox(
-                height: size.height,
-                width: size.width,
-                child: VideoPlayerViewer(
-                  controller: controller,
-                  isMotionVideo: isMotionVideo,
-                  placeholder: placeholder,
-                  hideControlsTimer: hideControlsTimer,
-                  showControls: showControls,
-                  showDownloadingIndicator: showDownloadingIndicator,
-                  loopVideo: loopVideo,
-                ),
-              ),
-          ],
-        ),
-      ),
+          ),
+        if (showControls) const Center(child: CustomVideoPlayerControls()),
+      ],
     );
   }
 }

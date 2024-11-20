@@ -39,7 +39,7 @@ class NativeVideoViewerPage extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     /// TODO: Remove this when seeking remote videos on Android in the native video player is smooth.
-    if (true) {
+    if (asset.isRemote && Platform.isAndroid) {
       return VideoViewerPage(
         asset: asset,
         image: image,
@@ -377,7 +377,7 @@ class NativeVideoViewerPage extends HookConsumerWidget {
         return;
       }
 
-      // Delay the video playback to avoid a stutter in the swipe animation
+      // Delay video playback to avoid a stutter in the swipe animation
       Timer(const Duration(milliseconds: 300), () {
         if (!context.mounted) {
           return;
